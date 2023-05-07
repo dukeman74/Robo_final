@@ -181,7 +181,7 @@ def steer(from_point, to_point, delta_q):
         direction = to_point - from_point
         unit_direction = direction / np.linalg.norm(direction)
         to_point = from_point + unit_direction * delta_q #scale to_point to end up on the circle of radius delta_q if it would be outside it
-
+    return(np.rint(to_point).astype(int))
     # TODO Use the np.linspace function to get 10 points along the path from "from_point" to "to_point"
     path=np.linspace(from_point,to_point,10)
     path=np.rint(path).astype(int)
@@ -203,7 +203,7 @@ def check_path_valid(path, state_is_valid):
     return(True)
     raise NotImplementedError
 
-def rrt(state_bounds, state_is_valid, starting_point, goal_point, k, delta_q):
+def rrt(state_bounds, state_is_valid, starting_point, goal_point, k, delta_q,map):
     '''
     TODO: Implement the RRT algorithm here, making use of the provided state_is_valid function.
     RRT algorithm.
@@ -227,16 +227,16 @@ def rrt(state_bounds, state_is_valid, starting_point, goal_point, k, delta_q):
     for i in range(k):
         rando_goal=get_random_valid_vertex(state_is_valid,state_bounds)
         if(directed):
-            if(random.random() < 0.05):
+            if(random.random() < 0.20):
                 rando_goal = goal_point
         parent=get_nearest_vertex(node_list,rando_goal)
         move_from=parent
-        steer_result=steer(move_from.point,rando_goal,delta_q)
-        rando_goal=steer_result[-1]
-        if(check_path_valid(steer_result,state_is_valid)):
+        rando_goal=steer(move_from.point,rando_goal,delta_q)
+        #print("checking ",rando_goal,move_from.point)
+        if(collision_line(rando_goal,move_from.point,map)):
             yaboi=Node(rando_goal)
             yaboi.parent=parent
-            yaboi.path_from_parent=steer_result
+            yaboi.path_from_parent="lol"
             node_list.append(yaboi)
             if(directed and distance_nd(yaboi.point,goal_point)<10**-5):
                 return(yaboi) #only return winning path instead
@@ -246,6 +246,23 @@ def rrt(state_bounds, state_is_valid, starting_point, goal_point, k, delta_q):
     #return(Node(goal_point))
     return node_list
 #endregion
+
+def path_smoothing(path,map):
+    before=0
+    inq=1
+    after=2
+    while(after<len(path)):
+        if(collision_line(path[before],path[after],map)):
+            print("vertex: " + str(inq)+" has been determined to be unnessesary")
+            path.pop(inq)
+        else:
+            before+=1
+            inq+=1
+            after+=1
+    return(path)
+
+
+
 
 def RRT_plan(map,start,goal):
     start=np.array(start,dtype=int)
@@ -258,20 +275,93 @@ def RRT_plan(map,start,goal):
         if(map[pin[0]][pin[1]]==0):
             return(True)
         return(False)
-    path=rrt(bounds,valid,start,goal,10000,np.linalg.norm(bounds/10.))
-    plot_course(path)
+    path=rrt(bounds,valid,start,goal,3000,np.linalg.norm(bounds/10.),map)
+    path=plot_course(path,map)
+    path=path_smoothing(path,map)
+    for point in path:
+        map[point[0]][point[1]]=10
+    plt.imshow(map.T)
+    plt.show()
     return(path)
 
-def plot_course(node_at):
+def plot_course(node_at,map):
+    
     #for i in node_at:
     #    print("there was a node made at: ",i.point)
     #    map[i.point[0]][i.point[1]]=5
     #map[goal[0]][goal[1]]=10
+    map=map.copy()
+    points=[]
     while(node_at!=None):
-        map[node_at.point[0]][node_at.point[1]]=1
+        points.append(node_at.point)
+        map[node_at.point[0]][node_at.point[1]]=10
         node_at=node_at.parent
     plt.imshow(map.T)
     plt.show()
+    return(points)
+
+def get_points_on_line(p1, p2):
+    #print("points on line called")
+    points = []
+    x1, y1 = p1
+    x2, y2 = p2
+
+    # Calculate the differences between the coordinates
+    dx = abs(x2 - x1)
+    dy = abs(y2 - y1)
+
+    # Determine the direction of the coordinates
+    sx = 1 if x1 < x2 else -1
+    sy = 1 if y1 < y2 else -1
+
+    # Initialize the error
+    error = dx - dy
+
+    # Start at the first point
+    x, y = x1, y1
+
+    # Iterate over the points and add them to the list
+    i=0
+    maxi=1000
+    while i<maxi:
+        i+=1
+        if(sx==1):
+            if(x>x2):
+                break
+        else:
+            if(x<x2):
+                break
+        if(sy==1):
+            if(y>y2):
+                break
+        else:
+            if(y<y2):
+                break
+        points.append((x, y))
+
+        # Check if we have reached the end point
+        
+
+        #if x == x2 and y == y2:
+        #    break
+
+        # Calculate the error adjustment factors
+        e2 = 2 * error
+        if e2 > -dy:
+            error -= dy
+            x += sx
+        if e2 < dx:
+            error += dx
+            y += sy
+
+    return points
+
+def collision_line(p1,p2,map):
+    pts=get_points_on_line(p1,p2)
+    for i in pts:
+        if(map[i[0]][i[1]]!=0):
+            return(False)
+    return(True)
 
 #endregion
 
@@ -495,7 +585,7 @@ while robot.step(timestep) != -1:
             map = np.load("map.npy")
             plt.imshow(map.T)
             plt.show()
-            n = 10
+            n = 20
             kernel = np.ones((n, n))
             map_blocks = convolve2d(map, kernel, mode='same')
             map_blocks[map_blocks > 0] = 1
@@ -504,9 +594,8 @@ while robot.step(timestep) != -1:
             set_pose_via_truth()
             path = RRT_plan(map_blocks,we_to_map((pose_x,pose_y)),we_to_map((10,1.8)))
             wayP = []
-            while path.parent != None:
-                wayP.append(map_to_we([path.point[0],path.point[1]]))
-                path = path.parent
+            for point in path:
+                wayP.append(map_to_we([point[0],point[1]]))
             wayP = add_angles(wayP)
             state = 'drive'
             
