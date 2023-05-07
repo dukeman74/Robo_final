@@ -1,7 +1,8 @@
 """grocery controller."""
 
 # Nov 2, 2022
-
+from PIL import Image
+import time
 import copy
 from controller import Robot, Keyboard
 import math
@@ -98,7 +99,7 @@ map = np.zeros(shape=[360,360])
 
 
 gripper_status="closed"
-state="menu"
+state="cube"
 res = 300
 angle_threshold=math.pi/6
 distance_threshold=0.2
@@ -243,8 +244,8 @@ def rrt(state_bounds, state_is_valid, starting_point, goal_point, k, delta_q,map
             
     # TODO: Make sure to add every node you create onto node_list, and to set node.parent and node.path_from_parent for each
     print("big time miss")
+    return None
     #return(Node(goal_point))
-    return node_list
 #endregion
 
 def path_smoothing(path,map):
@@ -269,13 +270,16 @@ def RRT_plan(map,start,goal):
     goal=np.array(goal,dtype=int)
     print("start: ",start)
     print("goal: ",goal)
+    path = None
     bounds=np.array([[0,359],[67,292]])
     def valid(pin):
         #print("checking: ",pin)
         if(map[pin[0]][pin[1]]==0):
             return(True)
         return(False)
-    path=rrt(bounds,valid,start,goal,3000,np.linalg.norm(bounds/10.),map)
+    while(path == None):
+        path=rrt(bounds,valid,start,goal,1000,np.linalg.norm(bounds/10.),map)
+
     path=plot_course(path,map)
     path=path_smoothing(path,map)
     for point in path:
@@ -382,6 +386,7 @@ def add_angles(wayp):
 stall=0
 prevstate=0
 momentum=0
+initialTurn = 0
 def drive_to_points(wayp):
     angle_epsilon=.2
     distance_epsilon=.1
@@ -392,39 +397,60 @@ def drive_to_points(wayp):
     global stall
     global prevstate
     global momentum
+    global initialTurn
+    global state
+    rOffset = 0
+    lOffset = 0
+    #print("waypoints:                               ", wayp)
     if(stall>0):
         stall-=1
         return(0.00001,0.00001)
-    needed_angle=math.atan2(wayp[0][0]-wayp[1][0],wayp[0][1]-wayp[1][1])
+    #print("Pose X :", pose_x, " Pose Y: ",pose_y," W x: ", wayp[1][0], " Y w : ", wayp[1][1])
+    needed_angle=math.atan2((wayp[1][1]- pose_y),(wayp[1][0]-pose_x))
+
+    #needed_angle =  ((needed_angle + math.pi ) % (2*math.pi)) - math.pi
     #needed_angle=-math.atan2(wayp[0][1]-wayp[1][1],wayp[0][0]-wayp[1][0])
     
-    if(abs(needed_angle-pose_theta)<angle_epsilon):
+    if(abs(needed_angle-pose_theta)<angle_epsilon or initialTurn == 1):
+        initialTurn = 1
         if(prevstate==0):
-            print("reached the correct angle for this waypoint")
+            print("reached the correct angle for this waypoint                                x")
             prevstate=1
             stall=100
             return(0.1,-0.1)
-        print(needed_angle,pose_theta,(pose_x,pose_y),wayp[1])
+        #print("desired angle: " ,needed_angle, " My angle ",pose_theta,"Desired pos: ",wayp[1], "My pos: ", (pose_x,pose_y))
+
+        if(needed_angle<pose_theta):
+            lOffset = .3
+            rOffset = 0
+        if(needed_angle>pose_theta):
+            lOffset = 0
+            rOffset = .3
+            
         dist=math.sqrt((pose_x-wayp[1][0])**2+(pose_y-wayp[1][1])**2)
         if(dist<distance_epsilon):
             print("reached the correct location for this waypoint")
             wayp.pop(0)
-            
+            if(len(wayp) == 1):
+                state = 'cube'
+            initialTurn = 0
+            prevstate=0
             return((0,0))
         momentum+=0.001
         if(momentum>2):
             momentum=2
         if(momentum<0.01):
             return((momentum,-momentum))
-        return((momentum,momentum))
-    print(needed_angle,pose_theta,(pose_x,pose_y),wayp[1])
-    if(prevstate==1):
-            prevstate=0
+        return((momentum + lOffset,momentum + rOffset))
+    #print("desired angle: " ,needed_angle, " My angle ",pose_theta,"Desired pos: ",wayp[1], "My pos: ", (pose_x,pose_y))
+    if(prevstate==1): 
             stall=100
             return(0,0)
-    prevstate=0
     momentum=0
-    return((-.5,.5))
+    if(needed_angle<pose_theta):
+        return((.5,-.5))
+    else:
+        return((-.5,.5))
 
 #endregion
 #region mapping functions
@@ -534,6 +560,39 @@ def colorize(g):
 
 #endregion
 
+def cam():
+    cameraData = camera.getImage()
+    imageNP = np.frombuffer(cameraData, np.uint8).reshape((camera.getHeight(), camera.getWidth(), 4))
+    imageNP = imageNP[..., [2,1,0,3]]
+    img = Image.fromarray(imageNP, "RGBA")
+    img.show()
+    size = 0
+    #img.save("opengenus_image.jpeg")
+    mask = np.copy(imageNP)
+    for i1, y in enumerate(imageNP):
+        for i2, x in enumerate(y):
+            #if(i2 % 40 == 0):
+                #print(x[0],x[1],x[2])
+            if(x[0] > 0xD0 and x[1] > 0xD0 and x[2] < 40):
+                print("I found yellow at pixel: ", i2,i1 )
+                size+=1
+            else:
+                mask[i1][i2] = [0,0,0,255]
+    if(size != 0):
+        camDist(mask,size)
+    img2 = Image.fromarray(mask, "RGBA")
+    img2.show()
+    
+
+def camDist(img,size):
+    focal = 77 # found using camra specification focal_length = (width/2) / math.tan(fov/2)
+    angle = math.atan(size/focal)
+    print("size: ", size)
+    print(img.shape)
+    distance = size/angle
+    print(distance)
+    time.sleep(3)
+
 # Main Loop
 print("----------------------")
 print("L -> load map from file")
@@ -542,7 +601,7 @@ robot_parts["wheel_left_joint"].setVelocity(0)
 robot_parts["wheel_right_joint"].setVelocity(0)
 while robot.step(timestep) != -1:
 
-
+    set_pose_via_truth()
     if(state=="menu"):
         key = keyboard.getKey()
         while(keyboard.getKey() != -1): pass
@@ -557,7 +616,6 @@ while robot.step(timestep) != -1:
             map_blocks[map_blocks > 0] = 1
             plt.imshow(map_blocks.T)
             plt.show()
-            set_pose_via_truth()
             path = RRT_plan(map_blocks,we_to_map((pose_x,pose_y)),we_to_map((10,1.8)))
             wayP = []
             for point in path:
@@ -571,7 +629,6 @@ while robot.step(timestep) != -1:
             print("now in mapping mode")
 
     if(state=="map"):
-        set_pose_via_truth()
         #print("I am at: (" +str(pose_x)+ ", "+str(pose_y) +", " +str(pose_theta)+")")
         map_print()
         key = keyboard.getKey()
@@ -580,12 +637,13 @@ while robot.step(timestep) != -1:
             display.imageSave(None,"map.png") 
             print("Map file saved")
     if(state=="drive"):
-        set_pose_via_truth()
         v = drive_to_points(wayP)
         #print(v)
         robot_parts["wheel_left_joint"].setVelocity(v[0])
         robot_parts["wheel_right_joint"].setVelocity(v[1])
-    
+    if(state=="cube"):
+       cam()
+
     if(gripper_status=="open"):
         # Close gripper, note that this takes multiple time steps...
         robot_parts["gripper_left_finger_joint"].setPosition(0)
