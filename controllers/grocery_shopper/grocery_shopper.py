@@ -253,7 +253,7 @@ def path_smoothing(path,map):
     after=2
     while(after<len(path)):
         if(collision_line(path[before],path[after],map)):
-            print("vertex: " + str(inq)+" has been determined to be unnessesary")
+            #print("vertex: " + str(inq)+" has been determined to be unnessesary")
             path.pop(inq)
         else:
             before+=1
@@ -379,91 +379,53 @@ def add_angles(wayp):
     print(betterList)
     return betterList
         
-
+stall=0
+prevstate=0
+momentum=0
 def drive_to_points(wayp):
-    global d
-    global done
+    angle_epsilon=.2
+    distance_epsilon=.1
     global pose_x
-    global pose_y
     global pose_theta
-
-    #for i in range(len(wayP)-1):
-        #print("wayP:", wayp[i])
-    way=wayp[-1]
-    xr=pose_x
-    xg=way[0]
-    yr=pose_y
-    yg=way[1]
-    tr=pose_theta
-    tg=way[2]
-    print("My xy: ", xr,yr , " My angle: " , tr , " Trying to make it to: ", xg,yg, " Angle I want: ", tg)
-    p=math.sqrt((xr-xg)**2+(yr-yg)**2)
-    if(d==None):
-        d=p
-    a=math.atan2(yg-yr,xg-xr)-tr
-    h=tg-tr
-    if(p<distance_threshold and not done):
-        #print("close enough")
-        if(abs(h)<angle_threshold):
-            #print("angle enough")
-            print("made waypoint ",len(wayp))
-            if len(wayp)==1:
-                done=True
-                vL=0
-                vR=0
-            else:
-                at=wayp.pop()
-                d=None
-    #more cursed code
-    if(d!= None and not done):
-        p1=1
-        p2=1
-        p3=0
-        rat = p/d
-
-        p2 = rat
-        p3 = (.2/(.2-1))*(rat-.2) *((1/p2))
-        """if(p<1):
-            p3=-.4
-        if(p<.5):
-            p3=.4
-        if(p<0.2):
-            p2=0.1"""
-        dx=p1*p
-        dtheta=p2*a+p3*h
-        #print("p3: ",p3,"p2:",p2,"dtheta:",dtheta, "p:",p, "im at:",xr,yr)
-        #dtheta*=-1
-
+    global pose_y
+    global state
+    global stall
+    global prevstate
+    global momentum
+    if(stall>0):
+        stall-=1
+        return(0.00001,0.00001)
+    needed_angle=math.atan2(wayp[0][0]-wayp[1][0],wayp[0][1]-wayp[1][1])
+    #needed_angle=-math.atan2(wayp[0][1]-wayp[1][1],wayp[0][0]-wayp[1][0])
     
-        # STEP 1: Inverse Kinematics Equations (vL and vR as a function dX and dTheta)
-        # Note that vL and vR in code is phi_l and phi_r on the slides/lecture
-        
-        
-        
-        # STEP 2.3: Proportional velocities
-        r=MAX_SPEED_MS/MAX_SPEED
-        vL = (dx-dtheta/2)/r # Left wheel velocity in rad/s
-        vR = (dx+dtheta/2)/r# Right wheel velocity in rad/s
-        #print("a: ",a,"leftvel:",vL,"rightvel:",vR,"im at:",xr,yr)
-        if abs(vL)>abs(vR):
-            vR*=MAX_SPEED/abs(vL)
-            vL=vL/abs(vL)*MAX_SPEED
-        else:
-            vL*=MAX_SPEED/abs(vR)
-            vR=vR/abs(vR)*MAX_SPEED
-        #print("a: ",a,"leftvel:",vL,"rightvel:",vR,"im at:",xr,yr)
+    if(abs(needed_angle-pose_theta)<angle_epsilon):
+        if(prevstate==0):
+            print("reached the correct angle for this waypoint")
+            prevstate=1
+            stall=100
+            return(0.1,-0.1)
+        print(needed_angle,pose_theta,(pose_x,pose_y),wayp[1])
+        dist=math.sqrt((pose_x-wayp[1][0])**2+(pose_y-wayp[1][1])**2)
+        if(dist<distance_epsilon):
+            print("reached the correct location for this waypoint")
+            wayp.pop(0)
+            
+            return((0,0))
+        momentum+=0.001
+        if(momentum>2):
+            momentum=2
+        if(momentum<0.01):
+            return((momentum,-momentum))
+        return((momentum,momentum))
+    print(needed_angle,pose_theta,(pose_x,pose_y),wayp[1])
+    if(prevstate==1):
+            prevstate=0
+            stall=100
+            return(0,0)
+    prevstate=0
+    momentum=0
+    return((-.5,.5))
 
-        # STEP 2.4: Clamp wheel speeds
-        if(vL>MAX_SPEED):
-            vL=MAX_SPEED
-        if(vL<-MAX_SPEED):
-            vL=-MAX_SPEED
-        if(vR>MAX_SPEED):
-            vR=MAX_SPEED
-        if(vR<-MAX_SPEED):
-            vR=-MAX_SPEED
-        return((vL,vR))
-    return((0,0))
 #endregion
 #region mapping functions
 
@@ -576,7 +538,11 @@ def colorize(g):
 print("----------------------")
 print("L -> load map from file")
 print("M -> enter mapping mode(S to save map)")
+robot_parts["wheel_left_joint"].setVelocity(0)
+robot_parts["wheel_right_joint"].setVelocity(0)
 while robot.step(timestep) != -1:
+
+
     if(state=="menu"):
         key = keyboard.getKey()
         while(keyboard.getKey() != -1): pass
@@ -585,7 +551,7 @@ while robot.step(timestep) != -1:
             map = np.load("map.npy")
             plt.imshow(map.T)
             plt.show()
-            n = 20
+            n = 15
             kernel = np.ones((n, n))
             map_blocks = convolve2d(map, kernel, mode='same')
             map_blocks[map_blocks > 0] = 1
@@ -596,7 +562,8 @@ while robot.step(timestep) != -1:
             wayP = []
             for point in path:
                 wayP.append(map_to_we([point[0],point[1]]))
-            wayP = add_angles(wayP)
+            wayP=wayP[::-1]
+            #wayP = add_angles(wayP)
             state = 'drive'
             
         elif key == ord('M'):   #enter mapping mode
@@ -615,7 +582,7 @@ while robot.step(timestep) != -1:
     if(state=="drive"):
         set_pose_via_truth()
         v = drive_to_points(wayP)
-        print(v)
+        #print(v)
         robot_parts["wheel_left_joint"].setVelocity(v[0])
         robot_parts["wheel_right_joint"].setVelocity(v[1])
     
@@ -627,8 +594,8 @@ while robot.step(timestep) != -1:
             gripper_status="closed"
     else:
         # Open gripper
-        robot_parts["wheel_left_joint"].setVelocity(0)
-        robot_parts["wheel_right_joint"].setVelocity(0)
+        #robot_parts["wheel_left_joint"].setVelocity(0)
+        #robot_parts["wheel_right_joint"].setVelocity(0)
         robot_parts["gripper_left_finger_joint"].setPosition(0.045)
         robot_parts["gripper_right_finger_joint"].setPosition(0.045)
         if left_gripper_enc.getValue()>=0.044:
