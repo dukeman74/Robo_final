@@ -99,7 +99,7 @@ map = np.zeros(shape=[360,360])
 
 
 gripper_status="closed"
-state="cube"
+state="menu"
 res = 300
 angle_threshold=math.pi/6
 distance_threshold=0.2
@@ -268,6 +268,8 @@ def path_smoothing(path,map):
 def RRT_plan(map,start,goal):
     start=np.array(start,dtype=int)
     goal=np.array(goal,dtype=int)
+    print("start WB: ",map_to_we(start))
+    print("goal WB: ",map_to_we(goal))
     print("start: ",start)
     print("goal: ",goal)
     path = None
@@ -278,7 +280,7 @@ def RRT_plan(map,start,goal):
             return(True)
         return(False)
     while(path == None):
-        path=rrt(bounds,valid,start,goal,1000,np.linalg.norm(bounds/10.),map)
+        path=rrt(bounds,valid,start,goal,3000,np.linalg.norm(bounds/10.),map)
 
     path=plot_course(path,map)
     path=path_smoothing(path,map)
@@ -367,6 +369,16 @@ def collision_line(p1,p2,map):
             return(False)
     return(True)
 
+def makePath(map_blocks):
+    global wayP
+    global state
+    path = RRT_plan(map_blocks,we_to_map((pose_x,pose_y)),we_to_map(goalPoints.pop(0)))
+    print(wayP[0])
+    wayP = []
+    for point in path:
+        wayP.append(map_to_we([point[0],point[1]]))
+    wayP=wayP[::-1]
+    state = 'drive'
 #endregion
 
 #region drive
@@ -382,11 +394,12 @@ def add_angles(wayp):
    #print("")
     print(betterList)
     return betterList
-        
+
 stall=0
 prevstate=0
 momentum=0
 initialTurn = 0
+stuck = 0
 def drive_to_points(wayp):
     angle_epsilon=.2
     distance_epsilon=.1
@@ -397,11 +410,14 @@ def drive_to_points(wayp):
     global stall
     global prevstate
     global momentum
-    global initialTurn
     global state
+    global initialTurn
     rOffset = 0
     lOffset = 0
+    global stuck 
+    flip = 1
     #print("waypoints:                               ", wayp)
+    key = keyboard.getKey()
     if(stall>0):
         stall-=1
         return(0.00001,0.00001)
@@ -410,22 +426,43 @@ def drive_to_points(wayp):
 
     #needed_angle =  ((needed_angle + math.pi ) % (2*math.pi)) - math.pi
     #needed_angle=-math.atan2(wayp[0][1]-wayp[1][1],wayp[0][0]-wayp[1][0])
-    
-    if(abs(needed_angle-pose_theta)<angle_epsilon or initialTurn == 1):
-        initialTurn = 1
+    stuck += 1
+
+    if key == ord('L'):
+        print("desired angle: " ,needed_angle, " My angle ",pose_theta,"Desired pos: ",wayp[1], "My pos: ", (pose_x,pose_y))
+    if(abs(needed_angle - pose_theta) > math.pi):
+        if(needed_angle > (math.pi/2)):
+            needFake = needed_angle
+            poseFake = 2*math.pi - abs(pose_theta)
+        else:
+            poseFake = pose_theta
+            needFake = 2*math.pi - abs(needed_angle)
+    else:
+        needFake = needed_angle
+        poseFake = pose_theta
+
+        
+    if(abs(needFake-poseFake)<angle_epsilon or initialTurn == 1):
+        stuck = 0
         if(prevstate==0):
+            initialTurn = 1
             print("reached the correct angle for this waypoint                                x")
             prevstate=1
             stall=100
             return(0.1,-0.1)
         #print("desired angle: " ,needed_angle, " My angle ",pose_theta,"Desired pos: ",wayp[1], "My pos: ", (pose_x,pose_y))
 
-        if(needed_angle<pose_theta):
-            lOffset = .3
+
+        if(needFake<poseFake):
+            if key == ord('L'):
+                print("fixing right")
+            lOffset = .15
             rOffset = 0
-        if(needed_angle>pose_theta):
+        else:
+            if key == ord('L'):
+                print("fixing left")
             lOffset = 0
-            rOffset = .3
+            rOffset = .15
             
         dist=math.sqrt((pose_x-wayp[1][0])**2+(pose_y-wayp[1][1])**2)
         if(dist<distance_epsilon):
@@ -433,24 +470,25 @@ def drive_to_points(wayp):
             wayp.pop(0)
             if(len(wayp) == 1):
                 state = 'cube'
-            initialTurn = 0
             prevstate=0
+            initialTurn = 0
             return((0,0))
         momentum+=0.001
         if(momentum>2):
             momentum=2
         if(momentum<0.01):
             return((momentum,-momentum))
-        return((momentum + lOffset,momentum + rOffset))
-    #print("desired angle: " ,needed_angle, " My angle ",pose_theta,"Desired pos: ",wayp[1], "My pos: ", (pose_x,pose_y))
-    if(prevstate==1): 
-            stall=100
-            return(0,0)
+        return((momentum + (lOffset*momentum),momentum + (rOffset*momentum)))
     momentum=0
-    if(needed_angle<pose_theta):
+    prevstate=0
+    if(stuck > 1000):
+        flip = -1
+        print("stuck turing around")
+    if(needFake<poseFake):
         return((.5,-.5))
     else:
         return((-.5,.5))
+   
 
 #endregion
 #region mapping functions
@@ -564,41 +602,77 @@ def cam():
     cameraData = camera.getImage()
     imageNP = np.frombuffer(cameraData, np.uint8).reshape((camera.getHeight(), camera.getWidth(), 4))
     imageNP = imageNP[..., [2,1,0,3]]
-    img = Image.fromarray(imageNP, "RGBA")
-    img.show()
+    #img = Image.fromarray(imageNP, "RGBA")
+    #img.show()
     size = 0
     #img.save("opengenus_image.jpeg")
     mask = np.copy(imageNP)
+    yellows=[]
     for i1, y in enumerate(imageNP):
         for i2, x in enumerate(y):
             #if(i2 % 40 == 0):
                 #print(x[0],x[1],x[2])
             if(x[0] > 0xD0 and x[1] > 0xD0 and x[2] < 40):
                 print("I found yellow at pixel: ", i2,i1 )
+                yellows.append([i2,i1])
                 size+=1
             else:
                 mask[i1][i2] = [0,0,0,255]
+    block=None
     if(size != 0):
-        camDist(mask,size)
-    img2 = Image.fromarray(mask, "RGBA")
-    img2.show()
+        block=camDist(yellows,size)
+    return(block)
+    #img2 = Image.fromarray(mask, "RGBA")
+    #img2.show()
     
+#region camera/computer vision/color blobs    
+def get_centre(point_list):
+    total=[0,0]
+    for point in point_list:
+        total[0]+=point[0]
+        total[1]+=point[1]
+    total[0]=total[0]/len(point_list)
+    total[1]=total[1]/len(point_list)
+    return(total)
 
-def camDist(img,size):
-    focal = 77 # found using camra specification focal_length = (width/2) / math.tan(fov/2)
-    angle = math.atan(size/focal)
-    print("size: ", size)
-    print(img.shape)
-    distance = size/angle
-    print(distance)
-    time.sleep(3)
+def camDist(pointsin,size):
+    distance = (.07/2)/(math.tan(math.sqrt(size)/240)) #assuming we are seeing the block head on, and how many pixels its taking up compared with the fact that we know its 0.07 m 
+    centroid=get_centre(pointsin)
+    print("I spy a blonk")
+    print("centroid: ",centroid)
+    print("distance: ",distance)
+    height=135
+    width=240
+    Hfov=2
+    Vfov=2 * math.atan(math.tan(Hfov * 0.5) * (height / width))   #webots documentation: vertical FOV = 2 * atan(tan(fieldOfView * 0.5) * (height / width))
+    hoff=centroid[0]/width
+    voff=centroid[1]/height
+    hangle=(hoff-.5)*Hfov
+    vangle=(voff-.5)*Vfov
+    #get camera pose
+    #one time camera absolute pos = (-2.94275,2.82565,1.32287)
+    #one time compass gps pos = (-2.95534,2.80125,0.0872982)
+    cube_distance_infront=distance*math.cos(hangle)*math.cos(vangle)
+    cube_distance_right=distance*math.sin(hangle)*math.cos(vangle)
+    cube_distance_up=distance*math.cos(hangle)*math.sin(vangle)
+    return((cube_distance_infront,cube_distance_right,cube_distance_up))
 
+def menu_swap():
+    global state
+    state="menu"
+    print("----------------------")
+    print("L -> load map from file")
+    print("M -> enter mapping mode(WASD to move, P to save map)")
+    print("C -> measure for a cube in front of the bot")
+#endregion
 # Main Loop
 print("----------------------")
 print("L -> load map from file")
 print("M -> enter mapping mode(S to save map)")
 robot_parts["wheel_left_joint"].setVelocity(0)
 robot_parts["wheel_right_joint"].setVelocity(0)
+# 3rd ell should be (2.62,3.02), (.730,2),
+goalPoints = [(3.46,6.45),(3.51,2.91),(2.62,3.02),(.730,1.28),(-2.70,1.1),(-2.70,1.1),(-3.22,2.79),(2.277,-2.967),(4.36,-2.97),(-1.54,-4.965)]
 while robot.step(timestep) != -1:
 
     set_pose_via_truth()
@@ -616,33 +690,64 @@ while robot.step(timestep) != -1:
             map_blocks[map_blocks > 0] = 1
             plt.imshow(map_blocks.T)
             plt.show()
-            path = RRT_plan(map_blocks,we_to_map((pose_x,pose_y)),we_to_map((10,1.8)))
-            wayP = []
-            for point in path:
-                wayP.append(map_to_we([point[0],point[1]]))
-            wayP=wayP[::-1]
+            """ map_pt_list = []
+            for i in goalPoints:
+                map_pt_list.append(we_to_map(i))
+            print(goalPoints)
+            for point in map_pt_list:
+                if(map_blocks[point[0]][point[1]]!=0):
+                    print("throw")
+                    print(point)
+                    print(map_to_we(point))"""
+            makePath(map_blocks)
             #wayP = add_angles(wayP)
-            state = 'drive'
             
         elif key == ord('M'):   #enter mapping mode
             state="map"
             print("now in mapping mode")
+        elif key == ord('C'):   #enter cube mode
+            state="cube"
+            print("now in cube mode")
 
     if(state=="map"):
         #print("I am at: (" +str(pose_x)+ ", "+str(pose_y) +", " +str(pose_theta)+")")
         map_print()
         key = keyboard.getKey()
-        if key == ord('S'): #save the map
+        if key == ord('P'): #save the map
             np.save("map.npy",(map>.55)*1)
             display.imageSave(None,"map.png") 
             print("Map file saved")
+        v=[0,0]
+        spd=6
+        if(key==ord("W")):
+            v[0]=spd
+            v[1]=spd
+        if(key==ord("A")):
+            v[0]=-spd
+            v[1]=spd
+        if(key==ord("D")):
+            v[0]=spd
+            v[1]=-spd
+        if(key==ord("S")):
+            v[0]=-spd
+            v[1]=-spd
+        robot_parts["wheel_left_joint"].setVelocity(v[0])
+        robot_parts["wheel_right_joint"].setVelocity(v[1])
     if(state=="drive"):
         v = drive_to_points(wayP)
-        #print(v)
+        #if key == ord('L'):
+            #print("Wheel Speed: ", v)
         robot_parts["wheel_left_joint"].setVelocity(v[0])
         robot_parts["wheel_right_joint"].setVelocity(v[1])
     if(state=="cube"):
-       cam()
+       block=cam()
+       print(block)
+       menu_swap()
+
+       cube = False
+       if(cube == True):
+           makePath(map_blocks)
+           state = 'drive'
 
     if(gripper_status=="open"):
         # Close gripper, note that this takes multiple time steps...
