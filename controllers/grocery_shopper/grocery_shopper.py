@@ -517,7 +517,7 @@ def drive_to_points(wayp):
     else:
         needFake = needed_angle
         poseFake = pose_theta
-
+    #print("need FAke: ", needFake, "poseFake: ", poseFake)
     dist=math.sqrt((pose_x-wayp[1][0])**2+(pose_y-wayp[1][1])**2)  
     if(abs(needFake-poseFake)<angle_epsilon or initialTurn == 1 or (dist<distance_epsilon)):
         stuck = 0
@@ -525,7 +525,7 @@ def drive_to_points(wayp):
             initialTurn = 1
             key = keyboard.getKey()
             if key == ord('L'):
-                 print("reached the correct angle for this waypoint                                x")
+                print("reached the correct angle for this waypoint                                x")
             prevstate=1
             stall=100
             return(0.1,-0.1)
@@ -564,7 +564,7 @@ def drive_to_points(wayp):
     prevstate=0
     if(stuck > 1000):
         flip = -1
-        print("stuck turing around")
+        #print("stuck turing around")
     if(needFake<poseFake):
         return((.5,-.5))
     else:
@@ -797,13 +797,25 @@ def camDist(pointsin,size):
 
 #endregion
 def menu_swap():
+    global goalPoints
+    global orintation
+    global shelfLevAr
+    global wayT
+    goalPoints = [(3.46,6.45),(3.51,2.91),(2.62,3.02),(.81,1.08),(-2.70,1.1),(-2.70,1.1),(-3.22,2.70),(2.277,-2.967),(4.36,-2.97),(-1.54,-4.965),(-.96,1.005),(5.71,6.57)]
+    orintation = [0,0,0,1,1,1,0,1,1,0,1,0]
+    shelfLevArr = [0,0,1,1,1,0,0,1,0,1,1,0]
+
+    wayT = [(-5,0),(-4.81,5.72),(13.07,5.99),(12.91,2.28),(-6.25,1.93),(-5.23,-2.09),(12.98,-1.95),(12.73,-5.46),(-5.69,-5.8),(-10.791,0.227)]
     global state
     state="menu"
     print("----------------------")
     print("L -> load map from file and Use IK to move to cubes")
-    print("M -> enter mapping mode(WASD to move, P to save map)")
+    print("M -> enter Manual mapping mode")
+    print("A -> enter Auto mapping mode")
+    print("P -> save map in either and WASD to move in manual")
     print("C -> measure for a cube in front of the bot")
-    print("G -> test IK")
+    print("K -> test IK")
+    print("hold L -> debug print statments")
 # Main Loop
 robot_parts["wheel_left_joint"].setVelocity(0)
 robot_parts["wheel_right_joint"].setVelocity(0)
@@ -815,14 +827,17 @@ robot_parts["wheel_right_joint"].setVelocity(0)
 #0,0,1,1,1,0,0,1,0,1,1,0
 menu_swap()
 goalPoints = [(3.46,6.45),(3.51,2.91),(2.62,3.02),(.81,1.08),(-2.70,1.1),(-2.70,1.1),(-3.22,2.70),(2.277,-2.967),(4.36,-2.97),(-1.54,-4.965),(-.96,1.005),(5.71,6.57)]
-orintation = [(3.46,6.45),(3.51,2.91),(2.62,3.02),(.81,1.08),(-2.70,1.1),(-2.70,1.1),(-3.22,2.70),(2.277,-2.967),(4.36,-2.97),(-1.54,-4.965),(-.96,1.005),(5.71,6.57)]
+orintation = [0,0,0,1,1,1,0,1,1,0,1,0]
 shelfLevArr = [0,0,1,1,1,0,0,1,0,1,1,0]
 
+wayT = [(-5,0),(-4.81,5.72),(13.07,5.99),(12.91,2.28),(-6.25,1.93),(-5.23,-2.09),(12.98,-1.95),(12.73,-5.46),(-5.69,-5.8),(-10.791,0.227)]
 clawstate=True
 initial_position=None
 torso_moment=0
 target = [.56,-.27,1.4]
 ikResults = None
+auto = False
+test = False
 while robot.step(timestep) != -1:
 
     set_pose_via_truth()
@@ -864,24 +879,55 @@ while robot.step(timestep) != -1:
             makePath(map_blocks)
             #wayP = add_angles(wayP)           
         elif key == ord('M'):   #enter mapping mode
-            state="map"
-            print("now in mapping mode")
+            state="Manmap"
+            print("now in manual mapping mode P to export map")
+        elif key == ord('A'):   #enter mapping mode
+            state="Automap"
+            print("now in auto mapping mode P to export map")
         elif key == ord('C'):   #enter cube mode
+            stallShelf = 300
             state="cube"
+            test = True
             print("now in cube mode")
         elif key == ord('K'):   #enter IK testing
             state="IK"
             target = [.56,-.27,1.4]
             print("now in IK mode")
             ikResults=None
-    if(state=="map"):
-        #print("I am at: (" +str(pose_x)+ ", "+str(pose_y) +", " +str(pose_theta)+")")
+    if(state=="Automap"):
         map_print()
         key = keyboard.getKey()
         if key == ord('P'): #save the map
+            robot_parts["wheel_left_joint"].setVelocity(0)
+            robot_parts["wheel_right_joint"].setVelocity(0)
             np.save("map.npy",(map>.55)*1)
             display.imageSave(None,"map.png") 
             print("Map file saved")
+            menu_swap()
+        #print("I am at: (" +str(pose_x)+ ", "+str(pose_y) +", " +str(pose_theta)+")")
+        if(key==ord("L")):
+            print("Auto")
+        v = drive_to_points(wayT)
+        robot_parts["wheel_left_joint"].setVelocity(v[0])
+        robot_parts["wheel_right_joint"].setVelocity(v[1])
+        if(len(wayT) == 0):
+            np.save("map.npy",(map>.55)*1)
+            display.imageSave(None,"map.png") 
+            print("Map file saved")
+            menu_swap() 
+
+    if(state=="Manmap"):
+        map_print()
+        key = keyboard.getKey()
+        if key == ord('P'): #save the map
+            robot_parts["wheel_left_joint"].setVelocity(0)
+            robot_parts["wheel_right_joint"].setVelocity(0)
+            np.save("map.npy",(map>.55)*1)
+            display.imageSave(None,"map.png") 
+            print("Map file saved")
+            menu_swap()
+        if(key==ord("L")):
+            print("Manual")
         v=[0,0]
         spd=6
         if(key==ord("W")):
@@ -898,6 +944,7 @@ while robot.step(timestep) != -1:
             v[1]=-spd
         robot_parts["wheel_left_joint"].setVelocity(v[0])
         robot_parts["wheel_right_joint"].setVelocity(v[1])
+
     if(state=="drive"):
         v = drive_to_points(wayP)
         stallShelf = 300
@@ -908,23 +955,28 @@ while robot.step(timestep) != -1:
         robot_parts["wheel_left_joint"].setVelocity(v[0])
         robot_parts["wheel_right_joint"].setVelocity(v[1])
     if(state=="cube"):
-
-        rot = rotate()
-        robot_parts["wheel_left_joint"].setVelocity(rot[0])
-        robot_parts["wheel_right_joint"].setVelocity(rot[1])
-        if(rot[2] == True):
-            if(stallShelf == 300):
-                shelfLev = shelfLevArr.pop(0)
-            if(shelfLev == 1 ):
-                robot_parts["wheel_left_joint"].setVelocity(-1)
-                robot_parts["wheel_right_joint"].setVelocity(-1)
-                stallShelf-= 1
-            else:
-                stallShelf = 0   
-            if(stallShelf <= 0):
-                block=cam()
-                state = "IK"
-                print("Move arm using IK")
+        if(test):
+            test = False
+            block=cam()
+            print(block)
+            menu_swap()
+        else:
+            rot = rotate()
+            robot_parts["wheel_left_joint"].setVelocity(rot[0])
+            robot_parts["wheel_right_joint"].setVelocity(rot[1])
+            if(rot[2] == True):
+                if(stallShelf == 300):
+                    shelfLev = shelfLevArr.pop(0)
+                if(shelfLev == 1 ):
+                    robot_parts["wheel_left_joint"].setVelocity(-1)
+                    robot_parts["wheel_right_joint"].setVelocity(-1)
+                    stallShelf-= 1
+                else:
+                    stallShelf = 0   
+                if(stallShelf <= 0):
+                    block=cam()
+                    state = "IK"
+                    print("Move arm using IK")
 
     if(state=="IK"):
         key = keyboard.getKey()
@@ -1008,7 +1060,7 @@ while robot.step(timestep) != -1:
             # And plot the target position of your arm
             #my_chain.plot(ikResults, ax, target=offset_target)
             #matplotlib.pyplot.show()
-        if(key == ord('E')):
+        if(key == ord('L')):
             print("target point: ",target,"torso height: ",torso_moment)
         printing=False
         for res in range(len(ikResults)):
