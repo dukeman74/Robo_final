@@ -1,6 +1,10 @@
 """grocery controller."""
 
 # Nov 2, 2022
+from ikpy.chain import Chain
+from ikpy.link import OriginLink, URDFLink
+import matplotlib.pyplot
+from mpl_toolkits.mplot3d import Axes3D
 from PIL import Image
 import time
 import copy
@@ -27,7 +31,59 @@ LIDAR_ANGLE_RANGE = math.radians(240)
 
 # create the Robot instance.
 robot = Robot()
+#region webots cross ikpy setup    largely copy from docs: https://gist.github.com/ItsMichal/4a8fcb330d04f2ccba582286344dd9a7
 
+#generate urdf
+
+#with open("robot_urdf.urdf", "w") as file:  
+#    file.write(robot.getUrdf())  #but only once
+#base_elements=["base_link", "base_link_Torso_joint", "torso_lift_link", "torso_lift_link_TIAGo front arm_joint"]
+base_elements=["base_link", "base_link_Torso_joint", "Torso", "torso_lift_joint", "torso_lift_link", "torso_lift_link_TIAGo front arm_11367_joint", "TIAGo front arm_11381"]
+
+my_chain = Chain.from_urdf_file("robot_urdf.urdf", last_link_vector=[0.004, 0,-0.1741],base_elements=base_elements)
+print(my_chain.links)
+
+part_names = ("head_2_joint", "head_1_joint", "torso_lift_joint", "arm_1_joint",
+            "arm_2_joint",  "arm_3_joint",  "arm_4_joint",      "arm_5_joint",
+            "arm_6_joint",  "arm_7_joint",  "wheel_left_joint", "wheel_right_joint")
+
+for link_id in range(len(my_chain.links)):
+
+    # This is the actual link object
+    link = my_chain.links[link_id]
+    
+    # I've disabled "torso_lift_joint" manually as it can cause
+    # the TIAGO to become unstable.
+    if link.name not in part_names or link.name =="torso_lift_joint":
+        print("Disabling {}".format(link.name))
+        my_chain.active_links_mask[link_id] = False
+
+
+
+
+timestep = int(robot.getBasicTimeStep())
+
+motors = []
+for link in my_chain.links:
+    if link.name in part_names and link.name != "torso_lift_joint":
+        motor = robot.getDevice(link.name)
+
+        # Make sure to account for any motors that
+        # require a different maximum velocity!
+        if link.name == "torso_lift_joint":
+            motor.setVelocity(0.07)
+        else:
+            motor.setVelocity(1)
+            
+        position_sensor = motor.getPositionSensor()
+        position_sensor.enable(timestep)
+        motors.append(motor)
+
+def get_init():
+    return([0,0,0,0] + [m.getPositionSensor().getValue() for m in motors] + [0,0,0,0])
+
+
+#endregion
 # get the time step of the current world.
 timestep = int(robot.getBasicTimeStep())
 
@@ -41,7 +97,7 @@ part_names = ("head_2_joint", "head_1_joint", "torso_lift_joint", "arm_1_joint",
 
 # All motors except the wheels are controlled by position control. The wheels
 # are controlled by a velocity controller. We therefore set their position to infinite.
-target_pos = (0.0, 0.0, 0.35, 0.07, 1.02, -3.16, 1.27, 1.32, 0.0, 1.41, 'inf', 'inf',0.045,0.045)
+target_pos = (0.0, 0.0, 0.0, 0.07, 1.02, -3.16, 1.27, 1.32, 0.0, 1.41, 'inf', 'inf',0.045,0.045)
 
 robot_parts={}
 for i, part_name in enumerate(part_names):
@@ -268,10 +324,12 @@ def path_smoothing(path,map):
 def RRT_plan(map,start,goal):
     start=np.array(start,dtype=int)
     goal=np.array(goal,dtype=int)
-    print("start WB: ",map_to_we(start))
-    print("goal WB: ",map_to_we(goal))
-    print("start: ",start)
-    print("goal: ",goal)
+    key = keyboard.getKey()
+    if key == ord('L'):
+        print("start WB: ",map_to_we(start))
+        print("goal WB: ",map_to_we(goal))
+        print("start: ",start)
+        print("goal: ",goal)
     path = None
     bounds=np.array([[0,359],[67,292]])
     def valid(pin):
@@ -286,8 +344,10 @@ def RRT_plan(map,start,goal):
     path=path_smoothing(path,map)
     for point in path:
         map[point[0]][point[1]]=10
-    plt.imshow(map.T)
-    plt.show()
+    key = keyboard.getKey()
+    if key == ord('L'):
+        plt.imshow(map.T)
+        plt.show()
     return(path)
 
 def plot_course(node_at,map):
@@ -302,8 +362,10 @@ def plot_course(node_at,map):
         points.append(node_at.point)
         map[node_at.point[0]][node_at.point[1]]=10
         node_at=node_at.parent
-    plt.imshow(map.T)
-    plt.show()
+    key = keyboard.getKey()
+    if key == ord('L'):
+        plt.imshow(map.T)
+        plt.show()
     return(points)
 
 def get_points_on_line(p1, p2):
@@ -369,11 +431,18 @@ def collision_line(p1,p2,map):
             return(False)
     return(True)
 
+prev = (pose_x,pose_y)
 def makePath(map_blocks):
     global wayP
     global state
-    path = RRT_plan(map_blocks,we_to_map((pose_x,pose_y)),we_to_map(goalPoints.pop(0)))
-    print(wayP[0])
+    global prev
+    value = goalPoints.pop(0)
+    #print("Prev: ", prev , "Curr: ", value)
+    if(prev != value):
+        path = RRT_plan(map_blocks.copy(),we_to_map(prev),we_to_map(value))
+    else:
+        path = [[0,0]]
+    prev = value
     wayP = []
     for point in path:
         wayP.append(map_to_we([point[0],point[1]]))
@@ -391,8 +460,8 @@ def add_angles(wayp):
         next=wayp[i-1]
         t=math.atan2(next[1]-curr[1],next[0]-curr[0])
         betterList.append([curr[0],curr[1],t])
-   #print("")
-    print(betterList)
+    #print("")
+    #print(betterList)
     return betterList
 
 stall=0
@@ -412,11 +481,19 @@ def drive_to_points(wayp):
     global momentum
     global state
     global initialTurn
+    global firstRun
     rOffset = 0
     lOffset = 0
     global stuck 
     flip = 1
     #print("waypoints:                               ", wayp)
+    if(len(wayp) == 1):
+            state = 'cube'
+            firstRun = 0
+            prevstate=0
+            initialTurn = 0
+            return((0,0))
+
     key = keyboard.getKey()
     if(stall>0):
         stall-=1
@@ -441,12 +518,14 @@ def drive_to_points(wayp):
         needFake = needed_angle
         poseFake = pose_theta
 
-        
-    if(abs(needFake-poseFake)<angle_epsilon or initialTurn == 1):
+    dist=math.sqrt((pose_x-wayp[1][0])**2+(pose_y-wayp[1][1])**2)  
+    if(abs(needFake-poseFake)<angle_epsilon or initialTurn == 1 or (dist<distance_epsilon)):
         stuck = 0
         if(prevstate==0):
             initialTurn = 1
-            print("reached the correct angle for this waypoint                                x")
+            key = keyboard.getKey()
+            if key == ord('L'):
+                 print("reached the correct angle for this waypoint                                x")
             prevstate=1
             stall=100
             return(0.1,-0.1)
@@ -464,12 +543,14 @@ def drive_to_points(wayp):
             lOffset = 0
             rOffset = .15
             
-        dist=math.sqrt((pose_x-wayp[1][0])**2+(pose_y-wayp[1][1])**2)
         if(dist<distance_epsilon):
-            print("reached the correct location for this waypoint")
+            key = keyboard.getKey()
+            if key == ord('L'):
+                print("reached the correct location for this waypoint")
             wayp.pop(0)
             if(len(wayp) == 1):
                 state = 'cube'
+                firstRun = 0
             prevstate=0
             initialTurn = 0
             return((0,0))
@@ -597,35 +678,90 @@ def colorize(g):
     return(out)
 
 #endregion
+firstRun = 0
+valueRot = 0
+def rotate():
+    global orintation
+    global pose_theta
+    global firstRun
+    global valueRot
+    angle_epsilon=.05
+    if(firstRun == 0):
+        valueRot = orintation.pop(0)
+    if(valueRot == 0):
+        needed_angle = math.pi/2
+    else:
+        needed_angle = (3*math.pi)/2
+    firstRun = 1
+    
+    if(abs(needed_angle - pose_theta) > math.pi):
+        if(needed_angle > (math.pi/2)):
+            needFake = needed_angle
+            poseFake = 2*math.pi - abs(pose_theta)
+        else:
+            poseFake = pose_theta
+            needFake = 2*math.pi - abs(needed_angle)
+    else:
+        needFake = needed_angle
+        poseFake = pose_theta
+    
 
+    if(abs(needFake-poseFake)<angle_epsilon):
+        return((0,0,True))
+    if(needFake<poseFake):
+        return((.5,-.5,False))
+    else:
+        return((-.5,.5,False))
+def open_claw():
+    robot_parts["gripper_left_finger_joint"].setPosition(0.045)
+    robot_parts["gripper_right_finger_joint"].setPosition(0.045)
+
+def close_claw():
+    robot_parts["gripper_left_finger_joint"].setPosition(0)
+    robot_parts["gripper_right_finger_joint"].setPosition(0)
+
+
+
+
+    
+#region camera/computer vision/color blobs   
 def cam():
     cameraData = camera.getImage()
     imageNP = np.frombuffer(cameraData, np.uint8).reshape((camera.getHeight(), camera.getWidth(), 4))
     imageNP = imageNP[..., [2,1,0,3]]
-    #img = Image.fromarray(imageNP, "RGBA")
-    #img.show()
+    img = Image.fromarray(imageNP, "RGBA")
+    img.show()
     size = 0
     #img.save("opengenus_image.jpeg")
     mask = np.copy(imageNP)
     yellows=[]
+    key = keyboard.getKey()
     for i1, y in enumerate(imageNP):
         for i2, x in enumerate(y):
             #if(i2 % 40 == 0):
                 #print(x[0],x[1],x[2])
-            if(x[0] > 0xD0 and x[1] > 0xD0 and x[2] < 40):
-                print("I found yellow at pixel: ", i2,i1 )
-                yellows.append([i2,i1])
-                size+=1
+            if(len(goalPoints) <= 2):
+                if(x[0] < 40 and x[1] > 0xD0 and x[2] < 40):
+                    if key == ord('L'):
+                        print("I found Green at pixel: ", i2,i1 )
+                    yellows.append([i2,i1])
+                    size+=1
+                else:
+                    mask[i1][i2] = [0,0,0,255]
             else:
-                mask[i1][i2] = [0,0,0,255]
+                if(x[0] > 0xD0 and x[1] > 0xD0 and x[2] < 40):
+                    if key == ord('L'):
+                        print("I found yellow at pixel: ", i2,i1 )
+                    yellows.append([i2,i1])
+                    size+=1
+                else:
+                    mask[i1][i2] = [0,0,0,255]
     block=None
+    img2 = Image.fromarray(mask, "RGBA")
+    img2.show()
     if(size != 0):
         block=camDist(yellows,size)
-    return(block)
-    #img2 = Image.fromarray(mask, "RGBA")
-    #img2.show()
-    
-#region camera/computer vision/color blobs    
+    return(block) 
 def get_centre(point_list):
     total=[0,0]
     for point in point_list:
@@ -638,9 +774,11 @@ def get_centre(point_list):
 def camDist(pointsin,size):
     distance = (.07/2)/(math.tan(math.sqrt(size)/240)) #assuming we are seeing the block head on, and how many pixels its taking up compared with the fact that we know its 0.07 m 
     centroid=get_centre(pointsin)
-    print("I spy a blonk")
-    print("centroid: ",centroid)
-    print("distance: ",distance)
+    key = keyboard.getKey()
+    if key == ord('L'):
+        print("I spy a blonk")
+        print("centroid: ",centroid)
+        print("distance: ",distance)
     height=135
     width=240
     Hfov=2
@@ -657,58 +795,85 @@ def camDist(pointsin,size):
     cube_distance_up=distance*math.cos(hangle)*math.sin(vangle)
     return((cube_distance_infront,cube_distance_right,cube_distance_up))
 
+#endregion
 def menu_swap():
     global state
     state="menu"
     print("----------------------")
-    print("L -> load map from file")
+    print("L -> load map from file and Use IK to move to cubes")
     print("M -> enter mapping mode(WASD to move, P to save map)")
     print("C -> measure for a cube in front of the bot")
-#endregion
+    print("G -> test IK")
 # Main Loop
-print("----------------------")
-print("L -> load map from file")
-print("M -> enter mapping mode(S to save map)")
 robot_parts["wheel_left_joint"].setVelocity(0)
 robot_parts["wheel_right_joint"].setVelocity(0)
-# 3rd ell should be (2.62,3.02), (.730,2),
-goalPoints = [(3.46,6.45),(3.51,2.91),(2.62,3.02),(.730,1.28),(-2.70,1.1),(-2.70,1.1),(-3.22,2.79),(2.277,-2.967),(4.36,-2.97),(-1.54,-4.965)]
+# coords
+#orintaiont right = 1
+# topshelf = 0 mid = 1
+#(3.46,6.45),(3.51,2.91),(2.62,3.02),(.81,1.08),(-2.70,1.1),(-2.70,1.1),(-3.22,2.70),(2.277,-2.967),(4.36,-2.97),(-1.54,-4.965),(-.96,1.005),(5.71,6.57)
+#0,0,0,1,1,1,0,1,1,0,1,0
+#0,0,1,1,1,0,0,1,0,1,1,0
+menu_swap()
+goalPoints = [(3.46,6.45),(3.51,2.91),(2.62,3.02),(.81,1.08),(-2.70,1.1),(-2.70,1.1),(-3.22,2.70),(2.277,-2.967),(4.36,-2.97),(-1.54,-4.965),(-.96,1.005),(5.71,6.57)]
+orintation = [(3.46,6.45),(3.51,2.91),(2.62,3.02),(.81,1.08),(-2.70,1.1),(-2.70,1.1),(-3.22,2.70),(2.277,-2.967),(4.36,-2.97),(-1.54,-4.965),(-.96,1.005),(5.71,6.57)]
+shelfLevArr = [0,0,1,1,1,0,0,1,0,1,1,0]
+
+clawstate=True
+initial_position=None
+torso_moment=0
+target = [.56,-.27,1.4]
+ikResults = None
 while robot.step(timestep) != -1:
 
     set_pose_via_truth()
     if(state=="menu"):
+
         key = keyboard.getKey()
         while(keyboard.getKey() != -1): pass
         if key == ord('L'):  #load previous map
             print("Map loaded")
             map = np.load("map.npy")
-            plt.imshow(map.T)
-            plt.show()
+            key = keyboard.getKey()
+            if key == ord('L'):
+                plt.imshow(map.T)
+                plt.show()
             n = 15
             kernel = np.ones((n, n))
             map_blocks = convolve2d(map, kernel, mode='same')
             map_blocks[map_blocks > 0] = 1
-            plt.imshow(map_blocks.T)
-            plt.show()
+            key = keyboard.getKey()
+            if key == ord('L'):
+                plt.imshow(map_blocks.T)
+                plt.show()
             """ map_pt_list = []
             for i in goalPoints:
                 map_pt_list.append(we_to_map(i))
             print(goalPoints)
             for point in map_pt_list:
-                if(map_blocks[point[0]][point[1]]!=0):
-                    print("throw")
-                    print(point)
-                    print(map_to_we(point))"""
-            makePath(map_blocks)
-            #wayP = add_angles(wayP)
             
+            if(map_blocks[point[0]][point[1]]!=0):
+                print("throw")
+                print(point)
+                print(map_to_we(point))
+            if(map_blocks[we_to_map((-3.22,2.70))[0]][we_to_map((-3.22,2.70))[1]]!=0):
+                print("throw")
+            else:
+                print("dub")
+            """
+                
+            makePath(map_blocks)
+            #wayP = add_angles(wayP)           
         elif key == ord('M'):   #enter mapping mode
             state="map"
             print("now in mapping mode")
         elif key == ord('C'):   #enter cube mode
             state="cube"
             print("now in cube mode")
-
+        elif key == ord('K'):   #enter IK testing
+            state="IK"
+            target = [.56,-.27,1.4]
+            print("now in IK mode")
+            ikResults=None
     if(state=="map"):
         #print("I am at: (" +str(pose_x)+ ", "+str(pose_y) +", " +str(pose_theta)+")")
         map_print()
@@ -735,20 +900,130 @@ while robot.step(timestep) != -1:
         robot_parts["wheel_right_joint"].setVelocity(v[1])
     if(state=="drive"):
         v = drive_to_points(wayP)
-        #if key == ord('L'):
-            #print("Wheel Speed: ", v)
+        stallShelf = 300
+
+        key = keyboard.getKey()
+        if(key == ord('L')):
+            print("Wheel Speed: ", v)
         robot_parts["wheel_left_joint"].setVelocity(v[0])
         robot_parts["wheel_right_joint"].setVelocity(v[1])
     if(state=="cube"):
-       block=cam()
-       print(block)
-       menu_swap()
 
-       cube = False
-       if(cube == True):
-           makePath(map_blocks)
-           state = 'drive'
+        rot = rotate()
+        robot_parts["wheel_left_joint"].setVelocity(rot[0])
+        robot_parts["wheel_right_joint"].setVelocity(rot[1])
+        if(rot[2] == True):
+            if(stallShelf == 300):
+                shelfLev = shelfLevArr.pop(0)
+            if(shelfLev == 1 ):
+                robot_parts["wheel_left_joint"].setVelocity(-1)
+                robot_parts["wheel_right_joint"].setVelocity(-1)
+                stallShelf-= 1
+            else:
+                stallShelf = 0   
+            if(stallShelf <= 0):
+                block=cam()
+                state = "IK"
+                print("Move arm using IK")
 
+    if(state=="IK"):
+        key = keyboard.getKey()
+        if(key == ord('G')):
+            if(len(goalPoints) == 0):
+                print("Yay all cubes have been grabed, returning to menu")
+                menu_swap()
+            else:
+                makePath(map_blocks)
+        if(key == ord('C')): #close gripper
+            clawstate=False
+        if(key == ord('O')): #oper gripper
+            clawstate=True
+        if(key == ord('P')):#put gripper right above basket to setup a drop in
+            target=[0.1,0,1]
+            ikResults=None
+        if(key == ord('U')):#grabbing a block on top shelf
+            target = [.56,-.27,1.4]
+            ikResults=None
+        if(key == ord('B')):#grabbing a block on bottom shelf
+            target = [.56,-.27,.7]
+            ikResults=None
+
+        mod=0.01
+        if(key == ord('W')):
+            target=[target[0]+mod,target[1],target[2]]
+            ikResults=None
+        if(key == ord('S')):
+            target=[target[0]-mod,target[1],target[2]]
+            ikResults=None
+        if(key == ord('A')):
+            target=[target[0],target[1]+mod,target[2]]
+            ikResults=None
+        if(key == ord('D')):
+            target=[target[0],target[1]-mod,target[2]]
+            ikResults=None
+        if(key == ord('Q')):
+            target=[target[0],target[1],target[2]-mod]
+            ikResults=None
+        if(key == ord('E')):
+            target=[target[0],target[1],target[2]+mod]
+            ikResults=None
+        v=[0,0]
+        spd=1
+        if key == keyboard.UP:
+            v[0]=spd
+            v[1]=spd
+        if key == keyboard.LEFT:
+            v[0]=-spd
+            v[1]=spd
+        if key == keyboard.RIGHT:
+            v[0]=spd
+            v[1]=-spd
+        if key == keyboard.DOWN:
+            v[0]=-spd
+            v[1]=-spd
+        if key == ord(' '):
+            torso_moment+=mod
+        if key == ord('M'):
+            torso_moment-=mod
+        if(torso_moment<0):
+            torso_moment=0
+            
+        robot_parts["wheel_left_joint"].setVelocity(v[0])
+        robot_parts["wheel_right_joint"].setVelocity(v[1])
+        if(clawstate):
+            open_claw()
+        else:
+            close_claw()
+        
+        offset_target = target#[-(target[2])+0.22, -target[0]+0.08, (target[1])+0.97+0.2]
+        if(ikResults is None):
+            if(initial_position is None):
+                initial_position=get_init()
+            ikResults = my_chain.inverse_kinematics(offset_target, initial_position=initial_position,  target_orientation = [0,0,1], orientation_mode="Y")
+            #ax = matplotlib.pyplot.figure().add_subplot(111, projection='3d')
+
+            # Plot the current position of your arm
+            #my_chain.plot(initial_position, ax, target=offset_target)
+
+            # And plot the target position of your arm
+            #my_chain.plot(ikResults, ax, target=offset_target)
+            #matplotlib.pyplot.show()
+        if(key == ord('E')):
+            print("target point: ",target,"torso height: ",torso_moment)
+        printing=False
+        for res in range(len(ikResults)):
+            # This if check will ignore anything that isn't controllable
+            if my_chain.links[res].name in part_names:
+                robot.getDevice(my_chain.links[res].name).setPosition(ikResults[res])
+                if(printing):
+                    print("Setting {} to {}".format(my_chain.links[res].name, ikResults[res]))
+        if(clawstate):
+            goal=0.045
+        else:
+            goal=0
+        robot_parts["gripper_right_finger_joint"].setPosition(goal)
+        robot_parts["torso_lift_joint"].setPosition(torso_moment)   
+"""
     if(gripper_status=="open"):
         # Close gripper, note that this takes multiple time steps...
         robot_parts["gripper_left_finger_joint"].setPosition(0)
@@ -762,4 +1037,4 @@ while robot.step(timestep) != -1:
         robot_parts["gripper_left_finger_joint"].setPosition(0.045)
         robot_parts["gripper_right_finger_joint"].setPosition(0.045)
         if left_gripper_enc.getValue()>=0.044:
-            gripper_status="open"
+            gripper_status="open"  """
