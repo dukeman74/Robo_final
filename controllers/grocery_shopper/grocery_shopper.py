@@ -1,6 +1,6 @@
 """grocery controller."""
 
-# Nov 2, 2022
+# Nov 2, 2022 Max Saldi Duke Manchester Anand Odbayar
 from ikpy.chain import Chain
 from ikpy.link import OriginLink, URDFLink
 import matplotlib.pyplot
@@ -363,9 +363,9 @@ def plot_course(node_at,map):
         map[node_at.point[0]][node_at.point[1]]=10
         node_at=node_at.parent
     key = keyboard.getKey()
-    if key == ord('L'):
-        plt.imshow(map.T)
-        plt.show()
+    #if key == ord('L'):
+    plt.imshow(map.T)
+    plt.show()
     return(points)
 
 def get_points_on_line(p1, p2):
@@ -619,10 +619,10 @@ def map_print():
     
 
     # Draw the robot's current pose on the 360x360 display
-    display.setColor(int(0xFF0000))
+""" display.setColor(int(0xFF0000))
     map_point=we_to_map((pose_x,pose_y))
     display.drawPixel(map_point[0],map_point[1])
-    display.imageSave(None,"map.png") 
+    display.imageSave(None,"map.png") """
 
 def we_to_map(point):
     #webots top left = (16,10)
@@ -740,7 +740,7 @@ def cam():
         for i2, x in enumerate(y):
             #if(i2 % 40 == 0):
                 #print(x[0],x[1],x[2])
-            if(len(goalPoints) <= 2):
+            if(len(goalPoints) < 2):
                 if(x[0] < 40 and x[1] > 0xD0 and x[2] < 40):
                     if key == ord('L'):
                         print("I found Green at pixel: ", i2,i1 )
@@ -880,16 +880,18 @@ while robot.step(timestep) != -1:
             #wayP = add_angles(wayP)           
         elif key == ord('M'):   #enter mapping mode
             state="Manmap"
-            print("now in manual mapping mode P to export map")
+            print("now in manual mapping mode, P to save image")
         elif key == ord('A'):   #enter mapping mode
             state="Automap"
-            print("now in auto mapping mode P to export map")
+            stallShelf = 300 
+            print("now in auto mapping mode, P to save image")
         elif key == ord('C'):   #enter cube mode
             stallShelf = 300
             state="cube"
             test = True
             print("now in cube mode")
         elif key == ord('K'):   #enter IK testing
+            stallShelf = 300 
             state="IK"
             target = [.56,-.27,1.4]
             print("now in IK mode")
@@ -977,6 +979,7 @@ while robot.step(timestep) != -1:
                     block=cam()
                     state = "IK"
                     print("Move arm using IK")
+                    print("Press G after grabing cube to move to next waypoint")
 
     if(state=="IK"):
         key = keyboard.getKey()
@@ -1016,7 +1019,7 @@ while robot.step(timestep) != -1:
         if(key == ord('Q')):
             target=[target[0],target[1],target[2]-mod]
             ikResults=None
-        if(key == ord('E')):
+        if(key == ord('E')):        
             target=[target[0],target[1],target[2]+mod]
             ikResults=None
         v=[0,0]
